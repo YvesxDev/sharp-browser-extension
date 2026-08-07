@@ -1,6 +1,6 @@
 # Sharp Trading browser extension
 
-Sharp Trading adds Sharp controls to supported trading sites when a compatible Sharp client is connected.
+Sharp Trading adds Sharp controls to supported trading sites when a compatible Sharp client is connected
 
 ## Supported sites
 
@@ -27,3 +27,4 @@ Load `load-this-folder` as an unpacked Chrome extension.
 ```sh
 npm run zip
 ```
+"Vibe" coded chrome extension layer on top of Sharp CLI
