@@ -15,6 +15,8 @@ export default defineConfig({
       "http://127.0.0.1/*",
       "http://localhost/*",
       "https://webui.yvesdev.com/*",
+      "https://auth2.yvesdev.com/*",
+      "https://api.ipify.org/*",
       "https://axiom.trade/*",
       "https://trade.padre.gg/*",
       "https://gmgn.ai/*",

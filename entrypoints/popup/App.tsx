@@ -74,6 +74,20 @@ const marketLabels: Record<string, string> = {
 const marketLabel = (market: string) => marketLabels[market]
   ?? market.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 const sharpWebUiUrl = "https://webui.yvesdev.com";
+const sharpApiKeyPattern = /^SHARP-[A-Z0-9]{5}(?:-[A-Z0-9]{5}){3}$/;
+const remotePermissionOrigin = (endpoint: string) => {
+  const url = new URL(endpoint);
+  return `${url.protocol}//${url.hostname}/*`;
+};
+
+interface RemoteConnectionDraft {
+  id: string;
+  endpoint: string;
+  remote: true;
+  apiKey: string;
+  discordUserId: string;
+  clientIp: string;
+}
 
 const openSharpWebUi = () => {
   void browser.tabs.create({ url: sharpWebUiUrl });
@@ -1134,6 +1148,13 @@ export function App() {
   const [executionClientId, setExecutionClientId] = useState("");
   const [executionSelectionReady, setExecutionSelectionReady] = useState(false);
   const [executionPriorityFee, setExecutionPriorityFee] = useState<number>();
+  const [remoteApiKey, setRemoteApiKey] = useState("");
+  const [remoteDiscordUserId, setRemoteDiscordUserId] = useState("");
+  const [remoteDomain, setRemoteDomain] = useState("");
+  const [remoteConnections, setRemoteConnections] = useState<RemoteConnectionDraft[]>([]);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [remoteStatus, setRemoteStatus] = useState("");
+  const [remoteError, setRemoteError] = useState("");
   const executionClients = snapshot?.clients.filter((candidate) =>
     candidate.connected
     && candidate.authenticated
@@ -1271,6 +1292,101 @@ export function App() {
     if (response.ok) setSnapshot(response.snapshot);
   };
 
+  const discoverRemote = async () => {
+    const apiKey = remoteApiKey.trim().toUpperCase();
+    const discordUserId = remoteDiscordUserId.trim();
+    const customDomain = remoteDomain.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    if (!sharpApiKeyPattern.test(apiKey)) {
+      setRemoteError("Enter an API key like SHARP-XXXXX-XXXXX-XXXXX-XXXXX.");
+      return;
+    }
+    if (!/^\d{5,30}$/.test(discordUserId)) {
+      setRemoteError("Enter the Discord user ID linked to this Sharp API key.");
+      return;
+    }
+    if (customDomain && (customDomain.includes("/") || customDomain.includes(":"))) {
+      setRemoteError("Enter only the custom hostname, without a scheme, port, or path.");
+      return;
+    }
+    setRemoteBusy(true);
+    setRemoteError("");
+    setRemoteStatus("Finding your Sharp server…");
+    setRemoteConnections([]);
+    try {
+      const ipResponse = await fetch("https://api.ipify.org?format=json", {
+        cache: "no-store",
+        credentials: "omit"
+      });
+      if (!ipResponse.ok) throw new Error("Could not determine this device's public IP");
+      const ipPayload = await ipResponse.json() as { ip?: unknown };
+      if (typeof ipPayload.ip !== "string" || !ipPayload.ip.trim()) {
+        throw new Error("The public IP service returned an invalid response");
+      }
+      const clientIp = ipPayload.ip.trim();
+      const serverResponse = await fetch("https://auth2.yvesdev.com/external/remoteServer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: clientIp,
+          sharp_api_key: apiKey,
+          discord_user_id: discordUserId
+        })
+      });
+      const serverPayload = await serverResponse.json() as { remote_ip?: unknown; message?: unknown };
+      if (!serverResponse.ok) {
+        throw new Error(typeof serverPayload.message === "string"
+          ? serverPayload.message
+          : `Remote authorization failed (${serverResponse.status})`);
+      }
+      const discoveredHost = typeof serverPayload.remote_ip === "string"
+        ? serverPayload.remote_ip.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "")
+        : "";
+      const host = customDomain || discoveredHost;
+      if (!host) throw new Error("Sharp did not return a remote server address");
+      if (host.includes("/") || (!host.startsWith("[") && host.split(":").length === 2)) {
+        throw new Error("Sharp returned an invalid remote server address");
+      }
+      const hostname = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+      const connections = Array.from({ length: 11 }, (_, index): RemoteConnectionDraft => ({
+        id: `remote-client${index + 1}`,
+        endpoint: `https://${hostname}:${8686 + index}`,
+        remote: true,
+        apiKey,
+        discordUserId,
+        clientIp
+      }));
+      for (const connection of connections) new URL(connection.endpoint);
+      setRemoteApiKey(apiKey);
+      setRemoteConnections(connections);
+      setRemoteStatus(`Sharp server found at ${host}. Allow access to connect.`);
+    } catch (error) {
+      setRemoteStatus("");
+      setRemoteError(error instanceof Error ? error.message : "Could not find the remote Sharp server");
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const connectRemote = async () => {
+    if (!remoteConnections.length) return;
+    setRemoteBusy(true);
+    setRemoteError("");
+    try {
+      const origins = [...new Set(remoteConnections.map((connection) => remotePermissionOrigin(connection.endpoint)))];
+      const granted = await browser.permissions.request({ origins });
+      if (!granted) throw new Error("Remote host access was not granted");
+      const response = await request({ type: "sharp:connect-remote", connections: remoteConnections });
+      if (!response.ok) throw new Error(response.error);
+      if (response.snapshot) setSnapshot(response.snapshot);
+      setRemoteConnections([]);
+      setRemoteStatus("Remote clients saved. Connecting on ports 8686–8696…");
+    } catch (error) {
+      setRemoteError(error instanceof Error ? error.message : "Could not connect remote clients");
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
   if (!snapshot) return <main className="shell loading">Connecting to Sharp…</main>;
 
   return (
@@ -1321,6 +1437,8 @@ export function App() {
           </div>
           <div className="pairingActions">
             <button className="primary" onClick={async () => {
+              const granted = await browser.permissions.request({ origins: snapshot.pendingPairing!.permissionOrigins });
+              if (!granted) return;
               const response = await request({ type: "sharp:pairing-approve", requestId: snapshot.pendingPairing!.requestId });
               if (response.ok) setSnapshot(response.snapshot);
             }}>Approve</button>
@@ -1460,6 +1578,57 @@ export function App() {
 
       {tab === "settings" && (
         <section className="stack">
+          <section className="field remoteConnect">
+            <div className="fieldHead">
+              <strong>Remote Sharp</strong>
+              <small>Same connection flow as WebUI</small>
+            </div>
+            <label>
+              <span>API key</span>
+              <input
+                type="password"
+                autoComplete="off"
+                placeholder="SHARP-XXXXX-XXXXX-XXXXX-XXXXX"
+                value={remoteApiKey}
+                onChange={(event) => {
+                  setRemoteApiKey(event.target.value);
+                  setRemoteConnections([]);
+                }}
+              />
+            </label>
+            <label>
+              <span>Discord user ID</span>
+              <input
+                inputMode="numeric"
+                placeholder="Linked Discord user ID"
+                value={remoteDiscordUserId}
+                onChange={(event) => {
+                  setRemoteDiscordUserId(event.target.value);
+                  setRemoteConnections([]);
+                }}
+              />
+            </label>
+            <label>
+              <span>Custom domain <small>optional</small></span>
+              <input
+                placeholder="sharp.example.com"
+                value={remoteDomain}
+                onChange={(event) => {
+                  setRemoteDomain(event.target.value);
+                  setRemoteConnections([]);
+                }}
+              />
+            </label>
+            {remoteError && <div className="error">{remoteError}</div>}
+            {remoteStatus && <p className="remoteStatus">{remoteStatus}</p>}
+            {remoteConnections.length
+              ? <button type="button" className="primary" disabled={remoteBusy} onClick={connectRemote}>
+                  {remoteBusy ? "Connecting…" : "Allow access and connect"}
+                </button>
+              : <button type="button" className="secondary" disabled={remoteBusy} onClick={discoverRemote}>
+                  {remoteBusy ? "Finding server…" : "Find remote clients"}
+                </button>}
+          </section>
           <div className="executionChainTabs" role="tablist" aria-label="Execution chain">
             {(Object.keys(chainLabels) as SharpChain[]).map((chain) => <button
               type="button"

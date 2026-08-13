@@ -87,6 +87,10 @@ input[type="checkbox"] { accent-color: var(--primary); }
 .settingRow small { color: var(--muted); margin-top: 3px; }
 .field > span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 7px; }
 .field input { width: 100%; border: 1px solid var(--border-bright); border-radius: 5px; padding: 8px; background: var(--popover); color: var(--foreground); }
+.remoteConnect { display: grid; gap: 9px; }
+.remoteConnect > label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
+.remoteConnect > label > span small { color: #64748b; }
+.remoteStatus { margin: 0; color: #93c5fd; font-size: 10px; line-height: 1.4; }
 .amountField { display: grid; gap: 10px; }
 .fieldHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .fieldHead strong { color: var(--foreground); font-size: 12px; font-weight: 600; }

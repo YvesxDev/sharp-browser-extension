@@ -41,6 +41,36 @@ export default defineBackground(() => {
 
   const snapshot = () => publicSnapshot(state, registry.states());
 
+  const validatedRemoteConnections = (connections: StoredConnection[]): StoredConnection[] =>
+    connections.slice(0, 16).filter((connection) => {
+      try {
+        const url = new URL(connection.endpoint);
+        return url.protocol === "https:"
+          && connection.remote === true
+          && typeof connection.id === "string"
+          && connection.id.length > 0
+          && connection.id.length <= 80
+          && typeof connection.apiKey === "string"
+          && connection.apiKey.length > 0
+          && connection.apiKey.length <= 512
+          && typeof connection.discordUserId === "string"
+          && connection.discordUserId.length > 0
+          && connection.discordUserId.length <= 80
+          && typeof connection.clientIp === "string"
+          && connection.clientIp.length > 0
+          && connection.clientIp.length <= 80;
+      } catch {
+        return false;
+      }
+    }).map((connection) => ({
+      id: connection.id,
+      endpoint: connection.endpoint,
+      remote: true,
+      apiKey: connection.apiKey!,
+      discordUserId: connection.discordUserId!,
+      clientIp: connection.clientIp!
+    }));
+
   const broadcastState = () => {
     browser.runtime.sendMessage({ type: "sharp:state-changed", snapshot: snapshot() }).catch(() => undefined);
     browser.tabs.query({}).then((tabs) => {
@@ -732,6 +762,21 @@ export default defineBackground(() => {
           await writeStoredState(state);
           broadcastState();
           return { ok: true, snapshot: snapshot() };
+        case "sharp:connect-remote": {
+          const connections = validatedRemoteConnections(message.connections);
+          if (!connections.length || connections.length !== message.connections.length) {
+            return { ok: false, error: "Remote connection details are invalid" };
+          }
+          state.connections = [
+            ...state.connections.filter((connection) => !connection.remote),
+            ...connections
+          ];
+          delete state.pendingPairing;
+          await writeStoredState(state);
+          await browser.action.setBadgeText({ text: "" });
+          await registry.replaceConnections(state.connections);
+          return { ok: true, snapshot: snapshot() };
+        }
         case "sharp:pairing-approve": {
           const pending = state.pendingPairing;
           if (!pending || pending.requestId !== message.requestId) return { ok: false, error: "Pairing request expired" };
@@ -794,28 +839,7 @@ export default defineBackground(() => {
       if (offer.type !== "sharp:pairing-offer" || !offer.requestId || !Array.isArray(offer.connections)) {
         return { ok: false, error: "Invalid pairing offer" };
       }
-      const connections = offer.connections.slice(0, 16).filter((connection) => {
-        try {
-          const url = new URL(connection.endpoint);
-          return url.protocol === "https:"
-            && connection.remote === true
-            && typeof connection.id === "string"
-            && connection.id.length > 0
-            && connection.id.length <= 80
-            && typeof connection.apiKey === "string"
-            && connection.apiKey.length > 0
-            && connection.apiKey.length <= 512;
-        } catch {
-          return false;
-        }
-      }).map((connection) => ({
-        id: connection.id,
-        endpoint: connection.endpoint,
-        remote: true,
-        apiKey: connection.apiKey!,
-        ...(typeof connection.discordUserId === "string" ? { discordUserId: connection.discordUserId } : {}),
-        ...(typeof connection.clientIp === "string" ? { clientIp: connection.clientIp } : {})
-      }));
+      const connections = validatedRemoteConnections(offer.connections);
       if (!connections.length) return { ok: false, error: "Pairing offer has no secure remote endpoints" };
       const checksum = offer.requestId.replaceAll("-", "").slice(0, 6).toUpperCase();
       const pending: PendingPairing = {

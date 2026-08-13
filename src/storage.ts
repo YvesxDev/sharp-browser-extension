@@ -166,7 +166,15 @@ export function publicSnapshot(
         checksum: state.pendingPairing.checksum,
         origin: state.pendingPairing.origin,
         createdAt: state.pendingPairing.createdAt,
-        connectionCount: state.pendingPairing.connections.length
+        connectionCount: state.pendingPairing.connections.length,
+        permissionOrigins: [...new Set(state.pendingPairing.connections.flatMap((connection) => {
+          try {
+            const url = new URL(connection.endpoint);
+            return [`${url.protocol}//${url.hostname}/*`];
+          } catch {
+            return [];
+          }
+        }))]
       }
     : undefined;
   return {

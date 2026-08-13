@@ -418,6 +418,7 @@ export interface ExtensionSnapshot {
     origin: string;
     createdAt: number;
     connectionCount: number;
+    permissionOrigins: string[];
   };
   lastUpdatedAt: number;
 }
@@ -469,6 +470,7 @@ export type RuntimeRequest =
   | { type: "sharp:list-wallet-lists"; clientId: string }
   | { type: "sharp:append-wallet-list"; clientId: string; wallet: string; chain: SharpChain; file: string }
   | { type: "sharp:update-settings"; patch: Partial<Pick<ExtensionSnapshot, "enabled" | "selectedClientIdsByChain" | "siteEnabled" | "quickAmounts" | "quickSellPercentages" | "automationExecution" | "walletTradeSellExecution" | "walletTradeSellExecutionByClient">> }
+  | { type: "sharp:connect-remote"; connections: Array<{ id: string; endpoint: string; remote: true; apiKey: string; discordUserId: string; clientIp: string }> }
   | { type: "sharp:pairing-approve"; requestId: string }
   | { type: "sharp:pairing-reject"; requestId: string }
   | { type: "sharp:wipe-remote" };
