@@ -82,6 +82,20 @@ export default defineContentScript({
     let prewarmError = "";
     let connectedClientIds = new Set<string>();
     let openMount: Mount | undefined;
+    const mutationScanSelector = [
+      "button",
+      "[role='button']",
+      "[tabindex]:not(input)",
+      "[class*='cursor-pointer']",
+      "[data-chain]",
+      "[data-address]",
+      "[data-token-address]",
+      "[data-contract-address]",
+      "[data-mint]",
+      "[data-clipboard-text]",
+      "[data-copy]",
+      "a[href]"
+    ].join(",");
     const toasts = createSharpToasts();
     const localPositionKey = "sharp:automation-position:v1";
     const localOpenKey = "sharp:automation-open:v1";
@@ -781,7 +795,23 @@ export default defineContentScript({
       scanTimer = window.setTimeout(() => {
         scanTimer = undefined;
         scan();
-      }, 160);
+      }, 250);
+    };
+
+    const mutationCanChangeTradeSurfaces = (mutation: MutationRecord) => {
+      const target = mutation.target instanceof Element
+        ? mutation.target
+        : mutation.target.parentElement;
+      if (target?.closest("[data-sharp-root]")) return false;
+      if (mutation.type === "attributes") return true;
+      if (target?.matches(mutationScanSelector)) return true;
+      return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => {
+        if (node instanceof Element) {
+          if (node.closest("[data-sharp-root]")) return false;
+          return node.matches(mutationScanSelector) || Boolean(node.querySelector(mutationScanSelector));
+        }
+        return node.parentElement?.matches(mutationScanSelector) ?? false;
+      });
     };
 
     const scheduleClientDiscovery = () => {
@@ -844,7 +874,9 @@ export default defineContentScript({
         automationPanel.updatePositions(message.clientId, message.positions);
       }
     });
-    observer = new MutationObserver(scheduleScan);
+    observer = new MutationObserver((mutations) => {
+      if (mutations.some(mutationCanChangeTradeSurfaces)) scheduleScan();
+    });
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,

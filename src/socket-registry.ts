@@ -57,6 +57,7 @@ interface ManagedSocket {
   positionSnapshotInFlight?: Promise<void>;
   positionSnapshotQueued?: boolean;
   capabilitiesRequestId?: string;
+  capabilitiesFallbackTimer?: ReturnType<typeof setTimeout>;
 }
 
 const requestTimeoutMs = 15_000;
@@ -1813,9 +1814,13 @@ export class SocketRegistry {
     }) => {
       if (envelope.operation !== "capabilities") return;
       if (!acceptsCapabilityResponse(connection.id, managed.capabilitiesRequestId, envelope)) return;
-      delete managed.capabilitiesRequestId;
       const parsed = capabilitiesSchema.safeParse(envelope.data);
       if (parsed.success) {
+        delete managed.capabilitiesRequestId;
+        if (managed.capabilitiesFallbackTimer !== undefined) {
+          clearTimeout(managed.capabilitiesFallbackTimer);
+          delete managed.capabilitiesFallbackTimer;
+        }
         managed.state.capabilities = parsed.data as SharpCapabilities;
         delete managed.state.error;
       } else {
@@ -1823,6 +1828,25 @@ export class SocketRegistry {
       }
       this.onChange();
     });
+    const acceptLegacyCapabilities = (payload: unknown) => {
+      if (!managed.capabilitiesRequestId) return;
+      const parsed = capabilitiesSchema.safeParse(payload);
+      if (!parsed.success) {
+        managed.state.error = "Sharp client returned an incompatible capability response";
+        this.onChange();
+        return;
+      }
+      delete managed.capabilitiesRequestId;
+      if (managed.capabilitiesFallbackTimer !== undefined) {
+        clearTimeout(managed.capabilitiesFallbackTimer);
+        delete managed.capabilitiesFallbackTimer;
+      }
+      managed.state.capabilities = parsed.data as SharpCapabilities;
+      delete managed.state.error;
+      this.onChange();
+    };
+    socket.on("getDevModeCapabilitiesV1Resp", acceptLegacyCapabilities);
+    socket.on("getExtensionCapabilitiesV1Resp", acceptLegacyCapabilities);
     for (const event of ["newToken", "newPosition"]) {
       socket.on(event, (position: SharpPosition) => {
         this.ingestNewPosition(managed, position);
@@ -1842,6 +1866,10 @@ export class SocketRegistry {
       managed.state.connected = false;
       managed.state.authenticated = false;
       delete managed.capabilitiesRequestId;
+      if (managed.capabilitiesFallbackTimer !== undefined) {
+        clearTimeout(managed.capabilitiesFallbackTimer);
+        delete managed.capabilitiesFallbackTimer;
+      }
       managed.prewarmed.clear();
       managed.prewarmPending.clear();
       if (managed.positionSnapshotTimer !== undefined) {
@@ -1863,11 +1891,23 @@ export class SocketRegistry {
     if (!managed.socket.connected || !managed.state.authenticated) return;
     const requestId = `capabilities:${managed.connection.id}:${crypto.randomUUID()}`;
     managed.capabilitiesRequestId = requestId;
+    if (managed.capabilitiesFallbackTimer !== undefined) {
+      clearTimeout(managed.capabilitiesFallbackTimer);
+    }
+    managed.state.error = "Connected and authenticated; waiting for Sharp capabilities";
     managed.socket.emit("devModeRequest", {
       request_id: requestId,
       operation: "capabilities",
       data: {}
     });
+    managed.capabilitiesFallbackTimer = setTimeout(() => {
+      delete managed.capabilitiesFallbackTimer;
+      if (!managed.socket.connected || !managed.state.authenticated || !managed.capabilitiesRequestId) return;
+      managed.state.error = "Connected to an older Sharp client; trying compatibility mode";
+      this.onChange();
+      managed.socket.emit("getDevModeCapabilitiesV1", {});
+      managed.socket.emit("getExtensionCapabilitiesV1", {});
+    }, 1_500);
   }
 
   private requireSocket(connectionId: string): ManagedSocket {

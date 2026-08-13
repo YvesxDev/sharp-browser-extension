@@ -1231,6 +1231,20 @@ export function App() {
     ) ?? [],
     [snapshot]
   );
+  const connectionDiagnostics = useMemo(() => {
+    const clients = snapshot?.clients ?? [];
+    const failures = clients.filter((client) => client.error);
+    const authenticatedWithoutCapabilities = clients.filter((client) =>
+      client.connected && client.authenticated && !client.capabilities && !client.error
+    );
+    return [...failures, ...authenticatedWithoutCapabilities]
+      .sort((left, right) => Number(right.endpoint.startsWith("https://")) - Number(left.endpoint.startsWith("https://")))
+      .slice(0, 4);
+  }, [snapshot]);
+  const connectionDiagnosticMessage = (error?: string) =>
+    !error || /^websocket error$/i.test(error.trim())
+      ? "No response from this port. The Sharp client is probably offline."
+      : error;
   const loadCustomTradeLauncher = async () => {
     setCustomTradeLoading(true);
     const response = await request({ type: "sharp:get-custom-trade-launcher" });
@@ -1473,6 +1487,17 @@ export function App() {
                 ? <div className="notice emptyLauncher"><span>Start the Sharp CLI on ports 8686-8696, or configure and pair it through the Sharp WebUI.</span><button type="button" className="secondary" onClick={openSharpWebUi}>Open Sharp WebUI</button></div>
                 : null}
           {customTradeError && <div className="error">{customTradeError}</div>}
+          {!connected.length && connectionDiagnostics.length > 0 && (
+            <section className="connectionDiagnostics">
+              <strong>Sharp connection status</strong>
+              {connectionDiagnostics.map((client) => <div key={client.endpointId}>
+                <span>{client.endpoint.replace(/^https?:\/\//, "")}</span>
+                <small>{connectionDiagnosticMessage(client.error)}</small>
+              </div>)}
+              {snapshot.clients.filter((client) => client.error).length > connectionDiagnostics.length
+                && <small>Additional ports are reporting the same connection problem.</small>}
+            </section>
+          )}
           {snapshot.clients.filter((client) =>
             client.connected
             && client.authenticated

@@ -14,11 +14,20 @@ Sharp Trading adds Sharp controls to supported trading sites when a compatible S
 
 ## Build
 
+Use Node.js 22.12 or newer. The repository's `.nvmrc` pins the tested version:
+
+```sh
+nvm install
+nvm use
+```
+
 ```sh
 npm ci
 npm run typecheck
 npm run build
 ```
+
+If WXT fails during `Generating types...` with `Cannot read properties of undefined`, verify `node --version`, remove the existing `node_modules`, and run `npm ci` under the pinned Node version.
 
 Load `load-this-folder` as an unpacked Chrome extension.
 

@@ -54,6 +54,11 @@ input[type="checkbox"] { accent-color: var(--primary); }
 .notice, .client, .settingRow, .field { border: 1px solid var(--border); background: var(--card); border-radius: 7px; padding: 11px; }
 .notice { color: #cbd5e1; font-size: 12px; line-height: 1.5; }
 .emptyLauncher { display: grid; gap: 10px; }
+.connectionDiagnostics { display: grid; gap: 7px; border: 1px solid rgba(245,158,11,.24); border-radius: 7px; padding: 10px; background: rgba(245,158,11,.06); }
+.connectionDiagnostics > strong { color: #fbbf24; font-size: 11px; }
+.connectionDiagnostics > div { display: grid; gap: 2px; }
+.connectionDiagnostics span { overflow: hidden; color: #cbd5e1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.connectionDiagnostics small { color: #94a3b8; font-size: 9px; line-height: 1.35; }
 .customTradeLauncher { display: grid; gap: 8px; }
 .webUiConfigure { flex: 0 0 auto; border: 1px solid rgba(59,130,246,.35); border-radius: 5px; padding: 6px 8px; background: rgba(59,130,246,.12); color: #93c5fd; font-size: 9px; cursor: pointer; }
 .customTradeChain { overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--card); }
