@@ -82,11 +82,10 @@ export default defineContentScript({
     let prewarmError = "";
     let connectedClientIds = new Set<string>();
     let openMount: Mount | undefined;
+    const isAxiom = location.hostname === "axiom.trade";
     const mutationScanSelector = [
       "button",
       "[role='button']",
-      "[tabindex]:not(input)",
-      "[class*='cursor-pointer']",
       "[data-chain]",
       "[data-address]",
       "[data-token-address]",
@@ -804,7 +803,6 @@ export default defineContentScript({
         : mutation.target.parentElement;
       if (target?.closest("[data-sharp-root]")) return false;
       if (mutation.type === "attributes") return true;
-      if (target?.matches(mutationScanSelector)) return true;
       return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => {
         if (node instanceof Element) {
           if (node.closest("[data-sharp-root]")) return false;
@@ -812,6 +810,19 @@ export default defineContentScript({
         }
         return node.parentElement?.matches(mutationScanSelector) ?? false;
       });
+    };
+
+    const axiomMutationsRequireScan = (mutations: MutationRecord[]) => {
+      if ([...mounts.values()].some((mount) =>
+        !mount.nativeButton.isConnected || !mount.hitTarget.isConnected
+      )) return true;
+      // Once Axiom's Instant Trade controls are mounted, live chart mutations cannot
+      // change them. Route changes and client-state changes schedule their own scans.
+      if (mounts.size > 0) return false;
+      return mutations.some((mutation) => mutation.type === "childList"
+        && [...mutation.addedNodes].some((node) => node instanceof Element
+          && (node.matches("button, [role='button']")
+            || Boolean(node.querySelector("button, [role='button']")))));
     };
 
     const scheduleClientDiscovery = () => {
@@ -875,7 +886,9 @@ export default defineContentScript({
       }
     });
     observer = new MutationObserver((mutations) => {
-      if (mutations.some(mutationCanChangeTradeSurfaces)) scheduleScan();
+      if (isAxiom
+        ? axiomMutationsRequireScan(mutations)
+        : mutations.some(mutationCanChangeTradeSurfaces)) scheduleScan();
     });
     observer.observe(document.documentElement, {
       childList: true,
@@ -892,7 +905,7 @@ export default defineContentScript({
         "href"
       ]
     });
-    ctx.addEventListener(document, "click", scheduleScan, true);
+    if (!isAxiom) ctx.addEventListener(document, "click", scheduleScan, true);
     ctx.addEventListener(window, "popstate", scheduleScan);
     ctx.addEventListener(window, "hashchange", scheduleScan);
     locationWatcher = watchLocationChanges(scheduleScan);

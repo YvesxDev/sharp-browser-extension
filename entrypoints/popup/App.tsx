@@ -1151,6 +1151,7 @@ export function App() {
   const [remoteApiKey, setRemoteApiKey] = useState("");
   const [remoteDiscordUserId, setRemoteDiscordUserId] = useState("");
   const [remoteDomain, setRemoteDomain] = useState("");
+  const [remoteLegacyHttp, setRemoteLegacyHttp] = useState(false);
   const [remoteConnections, setRemoteConnections] = useState<RemoteConnectionDraft[]>([]);
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remoteStatus, setRemoteStatus] = useState("");
@@ -1238,13 +1239,18 @@ export function App() {
       client.connected && client.authenticated && !client.capabilities && !client.error
     );
     return [...failures, ...authenticatedWithoutCapabilities]
-      .sort((left, right) => Number(right.endpoint.startsWith("https://")) - Number(left.endpoint.startsWith("https://")))
+      .sort((left, right) => Number(right.endpointId.startsWith("remote-")) - Number(left.endpointId.startsWith("remote-")))
       .slice(0, 4);
   }, [snapshot]);
-  const connectionDiagnosticMessage = (error?: string) =>
-    !error || /^websocket error$/i.test(error.trim())
-      ? "No response from this port. The Sharp client is probably offline."
-      : error;
+  const connectionDiagnosticMessage = (endpointId: string, endpoint: string, error?: string) => {
+    if (error && !/^websocket error$/i.test(error.trim())) return error;
+    if (endpointId.startsWith("remote-")) {
+      return endpoint.startsWith("https://")
+        ? "Remote HTTPS WebSocket failed. The client may still be online in WebUI."
+        : "Remote legacy HTTP WebSocket failed. The client may still be online in WebUI.";
+    }
+    return "No response from this port. The local Sharp client is probably offline.";
+  };
   const loadCustomTradeLauncher = async () => {
     setCustomTradeLoading(true);
     const response = await request({ type: "sharp:get-custom-trade-launcher" });
@@ -1361,9 +1367,10 @@ export function App() {
         throw new Error("Sharp returned an invalid remote server address");
       }
       const hostname = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+      const protocol = remoteLegacyHttp ? "http" : "https";
       const connections = Array.from({ length: 11 }, (_, index): RemoteConnectionDraft => ({
         id: `remote-client${index + 1}`,
-        endpoint: `https://${hostname}:${8686 + index}`,
+        endpoint: `${protocol}://${hostname}:${8686 + index}`,
         remote: true,
         apiKey,
         discordUserId,
@@ -1372,7 +1379,7 @@ export function App() {
       for (const connection of connections) new URL(connection.endpoint);
       setRemoteApiKey(apiKey);
       setRemoteConnections(connections);
-      setRemoteStatus(`Sharp server found at ${host}. Allow access to connect.`);
+      setRemoteStatus(`Sharp server found at ${host}. Using ${remoteLegacyHttp ? "legacy HTTP like the original extension" : "HTTPS"}. Allow access to connect.`);
     } catch (error) {
       setRemoteStatus("");
       setRemoteError(error instanceof Error ? error.message : "Could not find the remote Sharp server");
@@ -1491,8 +1498,8 @@ export function App() {
             <section className="connectionDiagnostics">
               <strong>Sharp connection status</strong>
               {connectionDiagnostics.map((client) => <div key={client.endpointId}>
-                <span>{client.endpoint.replace(/^https?:\/\//, "")}</span>
-                <small>{connectionDiagnosticMessage(client.error)}</small>
+                <span>{client.endpointId.startsWith("remote-") ? "Remote" : "Local"} · {client.endpoint}</span>
+                <small>{connectionDiagnosticMessage(client.endpointId, client.endpoint, client.error)}</small>
               </div>)}
               {snapshot.clients.filter((client) => client.error).length > connectionDiagnostics.length
                 && <small>Additional ports are reporting the same connection problem.</small>}
@@ -1643,6 +1650,17 @@ export function App() {
                   setRemoteConnections([]);
                 }}
               />
+            </label>
+            <label className="remoteTransport">
+              <input
+                type="checkbox"
+                checked={remoteLegacyHttp}
+                onChange={(event) => {
+                  setRemoteLegacyHttp(event.target.checked);
+                  setRemoteConnections([]);
+                }}
+              />
+              <span>Legacy HTTP <small>Matches the original extension; credentials are not TLS-encrypted.</small></span>
             </label>
             {remoteError && <div className="error">{remoteError}</div>}
             {remoteStatus && <p className="remoteStatus">{remoteStatus}</p>}

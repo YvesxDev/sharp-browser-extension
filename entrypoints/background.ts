@@ -45,7 +45,7 @@ export default defineBackground(() => {
     connections.slice(0, 16).filter((connection) => {
       try {
         const url = new URL(connection.endpoint);
-        return url.protocol === "https:"
+        return (url.protocol === "https:" || url.protocol === "http:")
           && connection.remote === true
           && typeof connection.id === "string"
           && connection.id.length > 0
@@ -840,7 +840,7 @@ export default defineBackground(() => {
         return { ok: false, error: "Invalid pairing offer" };
       }
       const connections = validatedRemoteConnections(offer.connections);
-      if (!connections.length) return { ok: false, error: "Pairing offer has no secure remote endpoints" };
+      if (!connections.length) return { ok: false, error: "Pairing offer has no supported remote endpoints" };
       const checksum = offer.requestId.replaceAll("-", "").slice(0, 6).toUpperCase();
       const pending: PendingPairing = {
         requestId: offer.requestId,

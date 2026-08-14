@@ -57,6 +57,9 @@ let lastAxiomEvmAddressScanHref = "";
 let axiomSolanaAddressCache:
   | { href: string; routeAddress?: string; address: string; source: Element }
   | undefined;
+let axiomInstantTradePanelCache:
+  | { href: string; panels: Element[] }
+  | undefined;
 const interactiveControlSelector =
   "button, [role='button'], [tabindex]:not(input), [class*='cursor-pointer']";
 const localizedBuyTerm = "(?:buy|kaufen|kopen|beli|al|acheter|comprar|compra|acquista|köp|kjøp|kup|купить|매수)";
@@ -76,9 +79,18 @@ function isPrimaryInteractiveControl(element: HTMLElement): boolean {
   return true;
 }
 
-function interactiveControls(container: ParentNode): HTMLElement[] {
-  return [...container.querySelectorAll<HTMLElement>(interactiveControlSelector)]
+type InteractiveControlCache = Map<ParentNode, HTMLElement[]>;
+
+function interactiveControls(
+  container: ParentNode,
+  cache?: InteractiveControlCache
+): HTMLElement[] {
+  const cached = cache?.get(container);
+  if (cached) return cached;
+  const controls = [...container.querySelectorAll<HTMLElement>(interactiveControlSelector)]
     .filter(isPrimaryInteractiveControl);
+  cache?.set(container, controls);
+  return controls;
 }
 
 function currentSite(): SiteDefinition | undefined {
@@ -92,7 +104,12 @@ export function currentPageTradeContext(): TradeContext | undefined {
   if (!chain) return undefined;
   const address = tradeAddressCandidate(site, chain, document.documentElement);
   if (!address) return undefined;
-  const creator = chain === "solana" ? creatorCandidate(site, document.documentElement) : undefined;
+  // Axiom pages can contain thousands of live wallet-tracker rows. Searching the
+  // entire document for a creator on every state refresh blocks its main thread;
+  // Sharp's prewarm response resolves the creator for Axiom instead.
+  const creator = chain === "solana" && site.id !== "axiom"
+    ? creatorCandidate(site, document.documentElement)
+    : undefined;
   const marketHint = marketHintCandidate(site, chain, document.documentElement);
   return {
     site: site.id,
@@ -752,11 +769,15 @@ function actionFor(button: HTMLElement): TradeAction | undefined {
   return undefined;
 }
 
-function isPairedActionToggle(site: SiteDefinition, button: HTMLElement): boolean {
+function isPairedActionToggle(
+  site: SiteDefinition,
+  button: HTMLElement,
+  controlCache?: InteractiveControlCache
+): boolean {
   if (site.id === "dexscreener") return false;
   let container = button.parentElement;
   for (let depth = 0; container && depth < 2; depth += 1, container = container.parentElement) {
-    const nearbyButtons = interactiveControls(container)
+    const nearbyButtons = interactiveControls(container, controlCache)
       .filter((candidate) => candidate.parentElement === container || candidate.parentElement?.parentElement === container);
     if (nearbyButtons.length !== 2 || !nearbyButtons.includes(button)) continue;
     const actions = new Set(nearbyButtons.map(actionFor));
@@ -776,11 +797,14 @@ function hasPresetTabs(labels: Set<string>): boolean {
   ].some((tabs) => tabs.every((tab) => labels.has(tab)));
 }
 
-function instantTradePanel(button: HTMLElement): Element | undefined {
+function instantTradePanel(
+  button: HTMLElement,
+  controlCache?: InteractiveControlCache
+): Element | undefined {
   let container = button.parentElement;
   for (let depth = 0; container && depth < 16; depth += 1, container = container.parentElement) {
     if (container === document.body || container === document.documentElement) break;
-    const buttons = interactiveControls(container);
+    const buttons = interactiveControls(container, controlCache);
     const labels = new Set(buttons.map(normalizedLabel));
     const isInstantPanel = hasPresetTabs(labels)
       && (container.textContent || "").includes("Buy")
@@ -790,15 +814,26 @@ function instantTradePanel(button: HTMLElement): Element | undefined {
   return undefined;
 }
 
-function instantTradePanels(): Element[] {
+function instantTradePanels(controlCache?: InteractiveControlCache): Element[] {
+  if (
+    axiomInstantTradePanelCache?.href === location.href
+    && axiomInstantTradePanelCache.panels.length > 0
+    && axiomInstantTradePanelCache.panels.every((panel) => panel.isConnected)
+  ) {
+    return axiomInstantTradePanelCache.panels;
+  }
   const panels = new Set<Element>();
   const presetTabs = document.querySelectorAll<HTMLElement>("button, [role='button']");
   for (const control of presetTabs) {
     if (!["P1", "PRESET 1"].includes(normalizedLabel(control))) continue;
-    const panel = instantTradePanel(control);
+    const panel = instantTradePanel(control, controlCache);
     if (panel) panels.add(panel);
   }
-  return [...panels];
+  const result = [...panels];
+  if (result.length > 0) {
+    axiomInstantTradePanelCache = { href: location.href, panels: result };
+  }
+  return result;
 }
 
 function quickPresetValue(
@@ -864,10 +899,13 @@ function quickTradePanel(button: HTMLElement): Element | undefined {
   return undefined;
 }
 
-function siteTradePanels(site: SiteDefinition): Element[] {
-  if (site.id === "axiom") return instantTradePanels();
+function siteTradePanels(
+  site: SiteDefinition,
+  controlCache?: InteractiveControlCache
+): Element[] {
+  if (site.id === "axiom") return instantTradePanels(controlCache);
   const panels = new Set<Element>();
-  for (const control of interactiveControls(document)) {
+  for (const control of interactiveControls(document, controlCache)) {
     if (
       quickPresetValue(control, "native") === undefined
       && quickPresetValue(control, "percentage") === undefined
@@ -925,7 +963,8 @@ export function instantTradeQuoteFor(
 
 function isInstantPresetRow(
   button: HTMLElement,
-  mode: "native" | "percentage"
+  mode: "native" | "percentage",
+  controlCache?: InteractiveControlCache
 ): boolean {
   const matchesMode = (candidate: HTMLElement) => {
     if (candidate.dataset.sharpAmountMode) {
@@ -939,7 +978,7 @@ function isInstantPresetRow(
   let container = button.parentElement;
   for (let depth = 0; container && depth < 10; depth += 1, container = container.parentElement) {
     if (container === document.body || container === document.documentElement) break;
-    const controls = interactiveControls(container);
+    const controls = interactiveControls(container, controlCache);
     const matching = controls.filter(matchesMode);
     const labels = new Set(controls.map(normalizedLabel));
     const containsPresetTabs = [
@@ -959,10 +998,12 @@ function isInstantPresetRow(
 
 function instantTradePreset(
   site: SiteDefinition,
-  button: HTMLElement
+  button: HTMLElement,
+  knownPanel?: Element,
+  controlCache?: InteractiveControlCache
 ): { action: TradeAction; amount: TradeCommand["amount"] } | undefined {
   if (site.id !== "axiom") return undefined;
-  const panel = instantTradePanel(button);
+  const panel = knownPanel ?? instantTradePanel(button, controlCache);
   if (!panel) return undefined;
   const mountedMode = button.dataset.sharpAmountMode;
   const mountedValue = Number(button.dataset.sharpAmountValue);
@@ -971,7 +1012,7 @@ function instantTradePreset(
     Number.isFinite(mountedValue) &&
     mountedValue > 0
   ) {
-    if (!isInstantPresetRow(button, mountedMode)) return undefined;
+    if (!isInstantPresetRow(button, mountedMode, controlCache)) return undefined;
     return {
       action: mountedMode === "native" ? "buy" : "sell",
       amount: { mode: mountedMode, value: mountedValue }
@@ -982,7 +1023,7 @@ function instantTradePreset(
   const sellMatch = label.match(/^(\d+(?:\.\d+)?)%$/);
   if (sellMatch) {
     const percentage = Number(sellMatch[1]);
-    return percentage > 0 && percentage <= 100 && isInstantPresetRow(button, "percentage")
+    return percentage > 0 && percentage <= 100 && isInstantPresetRow(button, "percentage", controlCache)
       ? { action: "sell", amount: { mode: "percentage", value: percentage } }
       : undefined;
   }
@@ -990,7 +1031,7 @@ function instantTradePreset(
     buyValue === undefined
     || !Number.isFinite(buyValue)
     || buyValue <= 0
-    || !isInstantPresetRow(button, "native")
+    || !isInstantPresetRow(button, "native", controlCache)
   ) return undefined;
   return { action: "buy", amount: { mode: "native", value: buyValue } };
 }
@@ -1012,10 +1053,12 @@ function quickTradePreset(
 
 function siteTradePreset(
   site: SiteDefinition,
-  button: HTMLElement
+  button: HTMLElement,
+  knownPanel?: Element,
+  controlCache?: InteractiveControlCache
 ): { action: TradeAction; amount: TradeCommand["amount"] } | undefined {
   return site.id === "axiom"
-    ? instantTradePreset(site, button)
+    ? instantTradePreset(site, button, knownPanel, controlCache)
     : quickTradePreset(site, button);
 }
 
@@ -1063,14 +1106,22 @@ export function scanTradeSurfaces(snapshot: ExtensionSnapshot): TradeSurface[] {
     || snapshot.compatibilityDisabledSites.includes(site.id)
   ) return [];
   const surfaces: TradeSurface[] = [];
-  const panels = siteTradePanels(site);
+  const controlCache: InteractiveControlCache = new Map();
+  const panels = siteTradePanels(site, controlCache);
   const marketHints = new Map<SharpChain, string>();
-  const buttons = new Set<HTMLElement>(
-    document.querySelectorAll<HTMLElement>("button:not([data-sharp-control])")
-  );
+  const buttons = new Set<HTMLElement>();
+  const panelByControl = new Map<HTMLElement, Element>();
+  if (site.id !== "axiom") {
+    for (const button of document.querySelectorAll<HTMLElement>("button:not([data-sharp-control])")) {
+      buttons.add(button);
+    }
+  }
   for (const panel of panels) {
-    for (const control of interactiveControls(panel)) {
-      if (!control.hasAttribute("data-sharp-control")) buttons.add(control);
+    for (const control of interactiveControls(panel, controlCache)) {
+      if (!control.hasAttribute("data-sharp-control")) {
+        buttons.add(control);
+        panelByControl.set(control, panel);
+      }
     }
   }
   for (const button of buttons) {
@@ -1080,13 +1131,14 @@ export function scanTradeSurfaces(snapshot: ExtensionSnapshot): TradeSurface[] {
       || !button.isConnected
       || button.closest("[data-sharp-root]")
     ) continue;
-    const instantPreset = panels.some((panel) => panel.contains(button))
-      ? siteTradePreset(site, button)
+    const knownPanel = panelByControl.get(button);
+    const instantPreset = knownPanel
+      ? siteTradePreset(site, button, knownPanel, controlCache)
       : undefined;
     if (button.dataset.sharpAmountMode && !instantPreset) continue;
     const action = instantPreset?.action ?? actionFor(button);
     if (!action) continue;
-    if (isPairedActionToggle(site, button)) continue;
+    if (!instantPreset && isPairedActionToggle(site, button, controlCache)) continue;
     const chain = findChain(site, button);
     if (!chain) continue;
     let marketHint = marketHints.get(chain);

@@ -28,7 +28,7 @@ export default defineConfig({
       "https://dexscreener.com/*",
       "https://www.dexscreener.com/*"
     ],
-    optional_host_permissions: ["https://*/*"],
+    optional_host_permissions: ["https://*/*", "http://*/*"],
     externally_connectable: {
       matches: [
         "https://webui.yvesdev.com/*",

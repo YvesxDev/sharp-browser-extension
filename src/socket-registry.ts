@@ -60,6 +60,37 @@ interface ManagedSocket {
   capabilitiesFallbackTimer?: ReturnType<typeof setTimeout>;
 }
 
+interface SocketTransportError extends Error {
+  description?: unknown;
+  context?: unknown;
+}
+
+function socketConnectionErrorMessage(error: SocketTransportError): string {
+  const description = error.description;
+  if (typeof description === "number") {
+    return `WebSocket handshake failed with HTTP ${description}`;
+  }
+  if (description instanceof Error && description.message) {
+    return `WebSocket failed: ${description.message}`;
+  }
+  if (typeof description === "string" && description.trim()) {
+    return `WebSocket failed: ${description.trim()}`;
+  }
+  const context = error.context;
+  if (context && typeof context === "object") {
+    const candidate = context as { status?: unknown; statusText?: unknown; type?: unknown };
+    if (typeof candidate.status === "number" && candidate.status > 0) {
+      return `WebSocket handshake failed with HTTP ${candidate.status}${
+        typeof candidate.statusText === "string" && candidate.statusText ? ` ${candidate.statusText}` : ""
+      }`;
+    }
+    if (typeof candidate.type === "string" && candidate.type !== "error") {
+      return `WebSocket failed: ${candidate.type}`;
+    }
+  }
+  return error.message || "WebSocket connection failed";
+}
+
 const requestTimeoutMs = 15_000;
 const walletInventoryTimeoutMs = 1_500;
 
@@ -1757,11 +1788,12 @@ export class SocketRegistry {
     existing?.socket.disconnect();
     const socket = io(connection.endpoint, {
       transports: ["websocket"],
+      secure: connection.endpoint.startsWith("https://"),
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 750,
       reconnectionDelayMax: 5_000,
-      timeout: 5_000
+      timeout: 10_000
     });
     const managed: ManagedSocket = {
       connection,
@@ -1784,6 +1816,8 @@ export class SocketRegistry {
       delete managed.state.error;
       socket.emit("authenticationReq", {
         dev_mode: true,
+        extension: true,
+        external_buy: false,
         client_name: "Sharp Browser Extension",
         client_version: browser.runtime.getManifest().version,
         buy_enabled: true,
@@ -1879,10 +1913,10 @@ export class SocketRegistry {
       managed.positionSnapshotQueued = false;
       this.onChange();
     });
-    socket.on("connect_error", (error) => {
+    socket.on("connect_error", (error: SocketTransportError) => {
       managed.state.connected = false;
       managed.state.authenticated = false;
-      managed.state.error = error.message;
+      managed.state.error = socketConnectionErrorMessage(error);
       this.onChange();
     });
   }
