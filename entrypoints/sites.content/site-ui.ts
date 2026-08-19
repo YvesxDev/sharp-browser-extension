@@ -4244,8 +4244,8 @@ export function createSharpAutomationPanel({
     render();
     requestAnimationFrame(normalizePosition);
     if (activeTab === "dev-sell") void loadCreatorSell();
-    else if (activeTab === "trade" || activeTab === "sell-auto" || activeTab === "position-autosell") void loadTradeState();
-    else if (activeTab === "migration") { void loadTasks(); void loadTradeState(); }
+    else if (activeTab === "trade" || activeTab === "sell-auto" || activeTab === "position-autosell") void loadTradeState(true);
+    else if (activeTab === "migration") { void loadTasks(); void loadTradeState(true); }
     else void loadTasks();
   };
 

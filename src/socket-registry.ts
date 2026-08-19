@@ -53,9 +53,11 @@ interface ManagedSocket {
   }>>;
   activeLeaseTargets: Map<string, string>;
   positions: Map<string, SharpPosition>;
+  pendingCanonicalPositionIds: Set<string>;
   positionSnapshotTimer?: ReturnType<typeof setTimeout>;
   positionSnapshotInFlight?: Promise<void>;
   positionSnapshotQueued?: boolean;
+  positionSnapshotRetryDelayMs: number;
   capabilitiesRequestId?: string;
   capabilitiesFallbackTimer?: ReturnType<typeof setTimeout>;
 }
@@ -93,6 +95,9 @@ function socketConnectionErrorMessage(error: SocketTransportError): string {
 
 const requestTimeoutMs = 15_000;
 const walletInventoryTimeoutMs = 1_500;
+const positionSnapshotInitialDelayMs = 50;
+const positionSnapshotRetryDelayMs = 250;
+const positionSnapshotMaxRetryDelayMs = 4_000;
 
 function isFailedDevModeResponse(envelope: { type?: unknown; status?: unknown }): boolean {
   const type = typeof envelope.type === "string" ? envelope.type.toLowerCase() : "";
@@ -1802,6 +1807,8 @@ export class SocketRegistry {
       prewarmPending: new Map(),
       activeLeaseTargets: new Map(),
       positions: new Map(),
+      pendingCanonicalPositionIds: new Set(),
+      positionSnapshotRetryDelayMs,
       state: {
         endpointId: connection.id,
         endpoint: connection.endpoint,
@@ -1906,6 +1913,8 @@ export class SocketRegistry {
       }
       managed.prewarmed.clear();
       managed.prewarmPending.clear();
+      managed.pendingCanonicalPositionIds.clear();
+      managed.positionSnapshotRetryDelayMs = positionSnapshotRetryDelayMs;
       if (managed.positionSnapshotTimer !== undefined) {
         clearTimeout(managed.positionSnapshotTimer);
         delete managed.positionSnapshotTimer;
@@ -1966,18 +1975,25 @@ export class SocketRegistry {
     const key = positionId(position);
     if (!key) return;
 
-    // newToken can carry stale wallet metadata; publish only the canonical getInitialData snapshot.
+    // Publish confirmed stream state immediately, then reconcile wallet metadata with state.get.
+    // A busy or not-yet-caught-up snapshot must never make a confirmed position disappear.
     managed.positions.set(key, position);
-    this.schedulePositionSnapshotRefresh(managed);
+    managed.pendingCanonicalPositionIds.add(key);
+    managed.positionSnapshotRetryDelayMs = positionSnapshotRetryDelayMs;
+    this.emitPositions(managed);
+    this.schedulePositionSnapshotRefresh(managed, positionSnapshotInitialDelayMs);
   }
 
-  private schedulePositionSnapshotRefresh(managed: ManagedSocket): void {
+  private schedulePositionSnapshotRefresh(
+    managed: ManagedSocket,
+    delayMs = positionSnapshotInitialDelayMs
+  ): void {
     managed.positionSnapshotQueued = true;
     if (managed.positionSnapshotTimer !== undefined || managed.positionSnapshotInFlight) return;
     managed.positionSnapshotTimer = setTimeout(() => {
       delete managed.positionSnapshotTimer;
       void this.refreshPositionSnapshot(managed, true);
-    }, 50);
+    }, delayMs);
   }
 
   private async refreshPositionSnapshot(managed: ManagedSocket, emit: boolean): Promise<void> {
@@ -2000,10 +2016,28 @@ export class SocketRegistry {
           const key = positionId(position);
           if (key) next.set(key, position);
         }
+        for (const key of [...managed.pendingCanonicalPositionIds]) {
+          if (next.has(key)) {
+            managed.pendingCanonicalPositionIds.delete(key);
+            continue;
+          }
+          const streamed = managed.positions.get(key);
+          if (streamed) next.set(key, streamed);
+          else managed.pendingCanonicalPositionIds.delete(key);
+        }
         managed.positions = next;
         if (emit) this.emitPositions(managed);
+        if (managed.pendingCanonicalPositionIds.size) {
+          managed.positionSnapshotQueued = true;
+        } else {
+          managed.positionSnapshotRetryDelayMs = positionSnapshotRetryDelayMs;
+        }
       } catch {
-        // Retain the last stream state until a canonical snapshot succeeds.
+        // Retain and republish stream state until a canonical snapshot succeeds.
+        if (managed.pendingCanonicalPositionIds.size) {
+          managed.positionSnapshotQueued = true;
+          if (emit) this.emitPositions(managed);
+        }
       }
     })();
     managed.positionSnapshotInFlight = refresh;
@@ -2011,7 +2045,19 @@ export class SocketRegistry {
       await refresh;
     } finally {
       delete managed.positionSnapshotInFlight;
-      if (managed.positionSnapshotQueued) this.schedulePositionSnapshotRefresh(managed);
+      if (managed.positionSnapshotQueued) {
+        const retryingCanonicalPosition = managed.pendingCanonicalPositionIds.size > 0;
+        const delayMs = retryingCanonicalPosition
+          ? managed.positionSnapshotRetryDelayMs
+          : positionSnapshotInitialDelayMs;
+        if (retryingCanonicalPosition) {
+          managed.positionSnapshotRetryDelayMs = Math.min(
+            managed.positionSnapshotRetryDelayMs * 2,
+            positionSnapshotMaxRetryDelayMs
+          );
+        }
+        this.schedulePositionSnapshotRefresh(managed, delayMs);
+      }
     }
   }
 
@@ -2038,7 +2084,10 @@ export class SocketRegistry {
       const tokenId = typeof update.tokenID === "string" ? update.tokenID : undefined;
       const byTokenId = update.byTokenID === true || payload.byTokenID === true;
       if (remove) {
-        if (id) changed = managed.positions.delete(id) || changed;
+        if (id) {
+          managed.pendingCanonicalPositionIds.delete(id);
+          changed = managed.positions.delete(id) || changed;
+        }
         continue;
       }
       const values = typeof update.values === "object" && update.values !== null
