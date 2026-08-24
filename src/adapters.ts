@@ -806,9 +806,14 @@ function instantTradePanel(
     if (container === document.body || container === document.documentElement) break;
     const buttons = interactiveControls(container, controlCache);
     const labels = new Set(buttons.map(normalizedLabel));
+    const actions = new Set(buttons.map(actionFor).filter((action) => action !== undefined));
     const isInstantPanel = hasPresetTabs(labels)
-      && (container.textContent || "").includes("Buy")
-      && (container.textContent || "").includes("Sell");
+      // Axiom's manager pages also contain the global P1/P2/P3 controls plus
+      // passive "Buys" and "Sells" table copy. Requiring actionable controls
+      // keeps an all-numeric trader label from making that table look like an
+      // Instant Trade preset grid.
+      && actions.has("buy")
+      && actions.has("sell");
     if (isInstantPanel) return container;
   }
   return undefined;
