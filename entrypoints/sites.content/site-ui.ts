@@ -23,7 +23,12 @@ import type {
 } from "../../src/protocol";
 import { solanaSenders } from "../../src/protocol";
 import { aggregatePositionMetrics } from "../../src/position-metrics";
-import { positionExecutionWallet, positionId, positionMatchesAsset } from "../../src/position-identity";
+import {
+  positionExecutionWallet,
+  positionId,
+  positionIsOpen,
+  positionMatchesAsset
+} from "../../src/position-identity";
 import { reconcileWalletPlan } from "../../src/wallet-routing";
 
 const defaultPositionAutomation = (): PositionAutomationPolicy => ({
@@ -1408,7 +1413,9 @@ export function createSharpAutomationPanel({
   };
 
   const currentSellPositionOwners = () => currentPositionOwners()
-    .filter(({ clientId, position }) => positionMatchesSellScope(clientId, position));
+    .filter(({ clientId, position }) =>
+      positionIsOpen(position) && positionMatchesSellScope(clientId, position)
+    );
 
   const currentSellPositions = () => currentSellPositionOwners().map(({ position }) => position);
 
@@ -1929,7 +1936,7 @@ export function createSharpAutomationPanel({
     if (tradeQuickEditing && tradeChain !== tradeQuickChain) tradeQuickEditing = false;
     if (tradeSellQuickEditing && tradeChain !== tradeSellQuickChain) tradeSellQuickEditing = false;
     const positions = currentSellPositions();
-    const positionOwners = currentPositionOwners();
+    const positionOwners = currentSellPositionOwners();
     const positionSourceLabel = currentPositionSourceLabel(currentSellPositionOwners());
     const statsWrap = document.createElement("div");
     statsWrap.className = "trade-stats-wrap";
@@ -2154,7 +2161,6 @@ export function createSharpAutomationPanel({
     sellInitial.classList.add("trade-sell-initial");
     const initialPositionsByClient = new Map<string, string[]>();
     for (const { clientId, position } of positionOwners) {
-      if (!positionMatchesSellScope(clientId, position)) continue;
       const id = positionId(position);
       if (!id) continue;
       initialPositionsByClient.set(clientId, [...(initialPositionsByClient.get(clientId) ?? []), id]);

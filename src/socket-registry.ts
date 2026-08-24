@@ -29,7 +29,12 @@ import {
   type WalletTradeSellTrigger,
   type WalletWordlist
 } from "./protocol";
-import { positionExecutionWallet, positionId, positionMatchesAsset } from "./position-identity";
+import {
+  positionExecutionWallet,
+  positionId,
+  positionIsOpen,
+  positionMatchesAsset
+} from "./position-identity";
 import type { StoredConnection } from "./storage";
 
 interface ManagedSocket {
@@ -392,6 +397,30 @@ export class SocketRegistry {
     const isSolanaBuy = command.action === "buy" && command.context.chain === "solana";
     const isSolanaSell = command.action === "sell" && command.context.chain === "solana";
     const tradeAddress = warmed?.resolvedAddress ?? command.context.address;
+    const requestedPositionIds = command.positionIdsByClient?.[connectionId]
+      ?.map((id) => id.trim())
+      .filter(Boolean);
+    let openPositionIds = requestedPositionIds;
+    if (command.action === "sell" && requestedPositionIds?.length) {
+      await this.refreshPositionSnapshot(managed, false);
+      openPositionIds = [...new Set(requestedPositionIds)].filter((id) => {
+        const position = managed.positions.get(id);
+        return Boolean(
+          position
+          && positionIsOpen(position)
+          && positionMatchesAsset(position, tradeAddress)
+        );
+      });
+      if (!openPositionIds.length) {
+        return {
+          endpointId: connectionId,
+          clientName,
+          requestId,
+          status: "failed",
+          message: "No open Sharp position is available for this token"
+        };
+      }
+    }
     const completion = this.createTradeResultWaiter(
       managed.socket,
       requestId,
@@ -450,8 +479,8 @@ export class SocketRegistry {
             ...(allocation.autosell ? { autosell: allocation.autosell } : {})
           }))
         } : {}),
-        ...(command.positionIdsByClient?.[connectionId]?.length ? {
-          position_ids: command.positionIdsByClient[connectionId]
+        ...(openPositionIds?.length ? {
+          position_ids: openPositionIds
         } : {}),
         require_precomputed:
           command.context.chain === "solana" && command.context.surface === "detail"
