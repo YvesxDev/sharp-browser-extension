@@ -432,7 +432,8 @@ export class SocketRegistry {
         ? this.createSellPositionChangeWaiter(
           managed,
           tradeAddress,
-          command.walletPlan?.allocations.map((allocation) => allocation.walletName) ?? []
+          command.walletPlan?.allocations.map((allocation) => allocation.walletName) ?? [],
+          openPositionIds ?? []
         )
         : undefined;
     const response = await this.request(
@@ -688,21 +689,26 @@ export class SocketRegistry {
   private createSellPositionChangeWaiter(
     managed: ManagedSocket,
     address: string,
-    selectedWallets: string[]
+    selectedWallets: string[],
+    requestedPositionIds: string[] = []
   ): {
     promise: Promise<{ ok: true; message: string }>;
     cancel(): void;
   } {
     const normalizedAddress = address.toLowerCase();
     const selected = new Set(selectedWallets);
+    const requested = new Set(requestedPositionIds);
     const snapshot = () => {
       const positions = new Map<string, { holding: number; sold: number; soldAll: boolean }>();
       for (const [id, position] of managed.positions) {
         const record = position as Record<string, unknown>;
         if (!positionMatchesAsset(position, normalizedAddress)) continue;
+        const key = positionId(position) ?? id;
+        if (requested.size && !requested.has(key)) continue;
+        if (!positionIsOpen(position)) continue;
         const wallet = positionExecutionWallet(position) ?? "";
-        if (selected.size && !selected.has(wallet)) continue;
-        positions.set(positionId(position) ?? id, {
+        if (!requested.size && selected.size && !selected.has(wallet)) continue;
+        positions.set(key, {
           holding: Number(position.realCurrentHoldings ?? record.holdings ?? 0),
           sold: Number(position.currentSold ?? record.current_sold ?? 0),
           soldAll: Boolean(position.soldAll ?? record.sold_all)
