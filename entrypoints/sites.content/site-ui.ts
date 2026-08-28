@@ -240,6 +240,7 @@ export function createSharpAutomationPanel({
 }: AutomationPanelOptions): SharpAutomationPanel {
   const host = document.createElement("div");
   host.dataset.sharpAutomationPortal = "";
+  if (location.hostname === "axiom.trade") host.style.zIndex = "30";
   const shadow = host.attachShadow({ mode: "open" });
   const style = document.createElement("style");
   style.textContent = automationStyles;
